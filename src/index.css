@@ -229,6 +229,15 @@ textarea:focus-visible {
 @utility reveal-d8 { --reveal-delay: 560ms; }
 
 /* Skip to content link - visible only on focus */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .skip-to-content {
   position: fixed;
   top: -100%;

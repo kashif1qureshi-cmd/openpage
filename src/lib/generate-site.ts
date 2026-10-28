@@ -7,71 +7,29 @@ const VALID_BLOCK_TYPES = new Set<string>(blockMetadata.map((b) => b.type))
 const VARIANT_MAP = Object.fromEntries(blockMetadata.map((b) => [b.type, new Set(b.variants)]))
 const DEFAULT_PROPS_MAP = Object.fromEntries(blockMetadata.map((b) => [b.type, b.defaultProps]))
 
-const GEMINI_MODEL = 'gemini-3-flash-preview'
-const STORAGE_KEY = 'openpage-gemini-key'
-
 export interface GenerationResult {
   config: SiteConfig
   source: 'ai' | 'template'
 }
 
 export async function generateSiteConfig(prompt: string, signal?: AbortSignal): Promise<GenerationResult> {
-  // 1. Try client-side Gemini if key exists
-  const apiKey = localStorage.getItem(STORAGE_KEY)
-  if (apiKey) {
-    try {
-      const config = await callGeminiDirect(prompt, apiKey, signal)
-      return { config, source: 'ai' }
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') throw err
-      // Fall through to server
-    }
-  }
+  const res = await fetch('/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+    signal,
+  })
 
-  // 2. Try server endpoint
-  try {
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt }),
-      signal,
-    })
+  let payload: unknown = null
+  try { payload = await res.json() } catch { /* handled below */ }
+  if (res.ok) return { config: validateSiteConfig(payload, prompt), source: 'ai' }
 
-    const contentType = res.headers.get('content-type') || ''
-    if (contentType.includes('application/json') && res.ok) {
-      const raw = await res.json()
-      return { config: validateSiteConfig(raw, prompt), source: 'ai' }
-    }
-  } catch (err) {
-    if (err instanceof Error && err.name === 'AbortError') throw err
-  }
-
-  // 3. Smart fallback template (instant, no fake progress)
-  return { config: getTemplateForPrompt(prompt), source: 'template' }
-}
-
-async function callGeminiDirect(prompt: string, apiKey: string, signal?: AbortSignal): Promise<SiteConfig> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal,
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: `Generate a website configuration for: ${prompt}` }] }],
-        systemInstruction: { parts: [{ text: GENERATION_PROMPT }] },
-        generationConfig: { responseMimeType: 'application/json', temperature: 0.8 },
-      }),
-    },
-  )
-
-  if (!res.ok) throw new Error(`Gemini API error: ${res.status}`)
-
-  const data = await res.json()
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text
-  if (!text) throw new Error('Empty Gemini response')
-
-  return validateSiteConfig(JSON.parse(text), prompt)
+  const message = payload && typeof payload === 'object' && 'error' in payload
+    ? String((payload as { error: unknown }).error)
+    : `Generation failed (${res.status})`
+  const error = new Error(message)
+  error.name = res.status === 429 ? 'RateLimitError' : 'GenerationError'
+  throw error
 }
 
 function isValidHex(s: unknown): s is string {
